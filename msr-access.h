@@ -61,6 +61,7 @@ void write_data(int function_code, uint64_t newval) {
 		}
 		break;
 	case 1:
+		/* TODO: change against values exposed by the processor's MSRs */
 		if (newval < 1 || newval > 83) {
 			fprintf(stderr, "New multiplier has to be between 1 (100 MHz) and 83 (8300 MHz).\n");
 			return;
@@ -148,7 +149,7 @@ void write_data(int function_code, uint64_t newval) {
 		break;
 	case 9:
 		if (newval != 1 && newval != 0) {
-			fprintf(stderr, "This value can only be set to 0 (disabled) or 1 (enabled).");
+			fprintf(stderr, "This value can only be set to 0 (disabled) or 1 (enabled).\n");
 			return;
 		}
 		regdata = rdmsr_on_cpu(1552, 0);
@@ -160,7 +161,7 @@ void write_data(int function_code, uint64_t newval) {
 		break;
 	case 10:
 		if (newval != 1 && newval != 0) {
-			fprintf(stderr, "This value can only be set to 0 (disabled) or 1 (enabled).");
+			fprintf(stderr, "This value can only be set to 0 (disabled) or 1 (enabled).\n");
 			return;
 		}
 		regdata = rdmsr_on_cpu(1552, 0);
@@ -187,7 +188,7 @@ void write_data(int function_code, uint64_t newval) {
 		break;
 	case 12:
 		if (newval != 1 && newval != 0) {
-			fprintf(stderr, "This value can only be set to 0 (disabled) or 1 (enabled).");
+			fprintf(stderr, "This value can only be set to 0 (disabled) or 1 (enabled).\n");
 			return;
 		}
 		regdata = rdmsr_on_cpu(1552, 0);
@@ -201,7 +202,7 @@ void write_data(int function_code, uint64_t newval) {
 		break;
 	case 13:
 		if (newval != 1 && newval != 0) {
-			fprintf(stderr, "This value can only be set to 0 (disabled) or 1 (enabled).");
+			fprintf(stderr, "This value can only be set to 0 (disabled) or 1 (enabled).\n");
 			return;
 		}
 		regdata = rdmsr_on_cpu(1552, 0);
@@ -214,9 +215,6 @@ void write_data(int function_code, uint64_t newval) {
 		wrmsr_on_cpu(1552, 0, new_data);
 		break;
 	case 15:
-		if (newval > 98) {
-			fprintf(stderr, "The temperature limit can not be higher than 98°C.");
-		}
 		regdata = rdmsr_on_cpu(418, 0);
 		new_data = regdata & 0b1111111111111111111111111111111111000000111111111111111111111111;
 		abs_temp_limit = ((regdata >> 16) & 0b011111111);
@@ -299,11 +297,7 @@ void wrmsr_on_cpu(uint32_t reg, int cpu, uint64_t data)
 
 	if (pwrite(fd, &data, sizeof data, reg) != sizeof data) {
 		if (errno == EIO) {
-			fprintf(stderr,
-				"wrmsr: CPU %d cannot set MSR "
-				"0x%08"PRIx32" to 0x%016"PRIx64"\n",
-				cpu, reg, data);
-			exit(4);
+			fprintf(stderr, "Your CPU does not accept this value on this setting. Please use another value.\n");
 		} else {
 			perror("wrmsr: pwrite");
 			exit(127);
