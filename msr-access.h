@@ -117,58 +117,11 @@ void write_data(int function_code, uint64_t newval) {
 		}
 		break;
 	case 1:
-		/* TODO: change against values exposed by the processor's MSRs */
-		if (newval < 1 || newval > 83) {
-			fprintf(stderr, "New multiplier has to be between 1 (100 MHz) and 83 (8300 MHz).\n");
-			return;
-		}
-		regdata = rdmsr_on_cpu(429, 0);
-		new_data = regdata & 0b1111111111111111111111111111111111111111111111111111111100000000;
-		new_data = new_data | newval;
-		wrmsr_on_cpu(429, 0, new_data);
-		break;
 	case 2:
-		if (newval < 1 || newval > 83) {
-			fprintf(stderr, "New multiplier has to be between 1 (100 MHz) and 83 (8300 MHz).\n");
-			return;
-		}
-		regdata = rdmsr_on_cpu(429, 0);
-		new_data = regdata & 0b1111111111111111111111111111111111111111111111110000000011111111;
-		new_data = new_data | (newval << 8);
-		wrmsr_on_cpu(429, 0, new_data);
-		break;
 	case 3:
-		if (newval < 1 || newval > 83) {
-			fprintf(stderr, "New multiplier has to be between 1 (100 MHz) and 83 (8300 MHz).\n");
-			return;
-		}
-		regdata = rdmsr_on_cpu(429, 0);
-		new_data = regdata & 0b1111111111111111111111111111111111111111000000001111111111111111;
-		new_data = new_data | (newval << 16);
-		wrmsr_on_cpu(429, 0, new_data);
-		break;
 	case 4:
-		if (newval < 1 || newval > 83) {
-			fprintf(stderr, "New multiplier has to be between 1 (100 MHz) and 83 (8300 MHz).\n");
-			return;
-		}
-		regdata = rdmsr_on_cpu(429, 0);
-		new_data = regdata & 0b1111111111111111111111111111111100000000111111111111111111111111;
-		new_data = new_data | (newval << 24);
-		wrmsr_on_cpu(429, 0, new_data);
-		break;
 	case 1234:
-		if (newval < 1 || newval > 83) {
-			fprintf(stderr, "New multiplier has to be between 1 (100 MHz) and 83 (8300 MHz).\n");
-			return;
-		}
-		regdata = rdmsr_on_cpu(429, 0);
-		new_data = regdata & 0b1111111111111111111111111111111100000000000000000000000000000000;
-		new_data = new_data | (newval << 24);
-		new_data = new_data | (newval << 16);
-		new_data = new_data | (newval << 8);
-		new_data = new_data | newval;
-		wrmsr_on_cpu(429, 0, new_data);
+		write_turbo_multiplier(function_code, newval);
 		break;
 	case 5:
 		if (newval < 1 || newval > 83) {
