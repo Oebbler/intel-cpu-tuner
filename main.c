@@ -7,10 +7,8 @@
 
 #include "msr-access.h"
 
-#define VERSION_STRING "0.0.1-alpha4"
+#define VERSION_STRING "0.0.1-alpha5"
 
-/* currently no known way to read out BCLK so this is statically set */
-#define BCLK 100
 /* Number of MSR values stored in msr_values array */
 #define MSR_VALS			6
 /* define array positions of MSR values */
@@ -23,8 +21,10 @@
 
 /* This method checks if all conditions are met to start the program and loads the msr kernel module */
 char setup();
+/* stores the currently defined maximum turbo value in the defined global variable */
+void get_turbo_vals(char **turbo_vals, uint64_t *msr_values);
 /* This method frees memory and exits the program properly */
-void exit_program(uint64_t **msr_values, int **value, int **input);
+void exit_program(uint64_t **msr_values, int **value, int **input, char **turbo_vals);
 /* This reads all needed values from the MSRs into the array */
 void read_from_msrs(uint64_t **msr_values);
 /* This is for parsing the command line arguments */
@@ -35,6 +35,7 @@ int main(int argc, char *argv[]) {
 	int* input;
 	int* value;
 	uint64_t* msr_values;
+	char* turbo_vals;
 
 	/* Set up the program and exit on error */
 	if (!setup()) {
@@ -44,7 +45,8 @@ int main(int argc, char *argv[]) {
 	input = (int*) malloc(sizeof(int));
 	value = (int*) malloc(sizeof(int));
 	msr_values = (uint64_t*) malloc(sizeof(uint64_t) * MSR_VALS);
-	if (input == NULL || value == NULL || msr_values == NULL) {
+	turbo_vals = (char*) malloc(sizeof(char) * 4);
+	if (input == NULL || value == NULL || msr_values == NULL || turbo_vals == NULL) {
 		fprintf(stderr, "There is not enough memory to start the program. Exiting...\n");
 		exit(1);
 	}
@@ -56,10 +58,10 @@ int main(int argc, char *argv[]) {
 		arg1 = parse_int(argv[1], 1);
 		arg2 = parse_int(argv[2], 2);
 		write_data(arg1, arg2);
-		exit_program(&msr_values, &value, &input);
+		exit_program(&msr_values, &value, &input, &turbo_vals);
 	} else if (argc != 1) {
 		fprintf(stderr, "Usage: %s [optional function value]\nExample: %s 1 30 sets the 1 core turbo frequency to %d MHz.\n%s starts this program in an interactive mode.\n", argv[0], argv[0], 30*BCLK, argv[0]);
-		exit_program(&msr_values, &value, &input);
+		exit_program(&msr_values, &value, &input, &turbo_vals);
 	}
 
 	/* main program; currently designed especially for i7-6820HK, but this works on other CPUs as well */
@@ -75,10 +77,11 @@ int main(int argc, char *argv[]) {
 		if (msr_values[TURBO_RATIO_LIMIT] == -1) {
 			printf ("Core clock ratio settings are not supported on this platform.\n");
 		} else {
-			printf(" 1) Turbo frequency (1  core): %d MHz\n", (int)(msr_values[TURBO_RATIO_LIMIT] & 0b011111111) * BCLK);
-			printf(" 2) Turbo frequency (2 cores): %d MHz\n", (int)((msr_values[TURBO_RATIO_LIMIT] >> 8) & 0b011111111) * BCLK);
-			printf(" 3) Turbo frequency (3 cores): %d MHz\n", (int)((msr_values[TURBO_RATIO_LIMIT] >> 16) & 0b011111111) * BCLK);
-			printf(" 4) Turbo frequency (4 cores): %d MHz\n", (int)((msr_values[TURBO_RATIO_LIMIT] >> 24) & 0b011111111) * BCLK);
+			get_turbo_vals(&turbo_vals, msr_values);
+			printf(" 1) Turbo frequency (1  core): %d MHz\n", (int) turbo_vals[0] * BCLK);
+			printf(" 2) Turbo frequency (2 cores): %d MHz\n", (int) turbo_vals[1] * BCLK);
+			printf(" 3) Turbo frequency (3 cores): %d MHz\n", (int) turbo_vals[2] * BCLK);
+			printf(" 4) Turbo frequency (4 cores): %d MHz\n", (int) turbo_vals[3] * BCLK);
 			printf("1234) Set turbo frequency for all cores\n");
 		}
 
@@ -140,7 +143,7 @@ int main(int argc, char *argv[]) {
 		printf("Which value should be changed (0 for exit)? ");
 		scanf("%d", input);
 		if (*input == 0) {
-			exit_program(&msr_values, &value, &input);
+			exit_program(&msr_values, &value, &input, &turbo_vals);
 		}
 		/* if voltage / lockage should be set or any setting not in the list (input between 1 and 15 or 1234), don't write anything */
 		if ((*input == 7 || *input == 14 || *input < 1 || *input > 15) && *input != 1234) {
@@ -172,15 +175,37 @@ char setup() {
 		fprintf(stderr, "Module msr is needed for this program but cannot be loaded.\n");
 		return 0;
 	}
+	PLATFORM_INFO = rdmsr_on_cpu(206, 0);
+	NOTURBO_MAX_CLK = (PLATFORM_INFO >> 8) & 0b011111111;
+	NOTURBO_EFF_CLK = (PLATFORM_INFO >> 40) & 0b011111111;
 	return 1;
 }
 
-void exit_program(uint64_t **msr_values, int **value, int **input) {
+void get_turbo_vals(char **turbo_vals, uint64_t *msr_values) {
+	int i;
+	char* working_vals = *turbo_vals;
+	if (turbo_vals == NULL || working_vals == NULL || msr_values == NULL) {
+		fprintf(stderr, "Retrieving the turbo values failed. This should never happen.\n");
+		exit(6);
+	}
+	CURR_MAX_TURBO = 0;
+	for (i = 0; i < 4; i++) {
+		/* turbo values for 1, 2, 3 and 4 cores */
+		working_vals[i] = (msr_values[TURBO_RATIO_LIMIT] >> (i * 8)) & 0b011111111;
+		/* maximum of all turbo values */
+		if (working_vals[i] > CURR_MAX_TURBO) {
+			CURR_MAX_TURBO = working_vals[i];
+		}
+	}
+}
+
+void exit_program(uint64_t **msr_values, int **value, int **input, char **turbo_vals) {
 	int retval;
 	/* free allocated memory and unload msr */
 	free(*msr_values);
 	free(*value);
 	free(*input);
+	free(*turbo_vals);
 	retval = system("modprobe -r msr");
 	/* If msr was not unloaded, this probably means msr is builtin */
 	if (WEXITSTATUS(retval) != 0) {

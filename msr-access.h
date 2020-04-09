@@ -27,6 +27,19 @@
 #include <unistd.h>
 #include <stdio.h>
 
+/* will be initialized in setup() in main.c */
+/* platform info as given from a r/o msr */
+static uint64_t PLATFORM_INFO;
+/* maximum clock rate without turbo; minimum rate turbo can operate on */
+static char NOTURBO_MAX_CLK;
+/* most efficient core clock */
+static char NOTURBO_EFF_CLK;
+/*current maximum turbo clk */
+static unsigned char CURR_MAX_TURBO;
+
+/* currently no known way to read out BCLK so this is statically set */
+#define BCLK 100
+
 
 /* returns true iff given function code is turbo-mode-related */
 char turbo_mode_code(int function_code);
@@ -51,9 +64,8 @@ void write_turbo_multiplier(int function_code, uint64_t newval) {
 	} else {
 		uint64_t new_data;
 		uint64_t regdata;
-		/* TODO: change against values exposed by the processor's MSRs */
-		if (newval < 1 || newval > 83) {
-			fprintf(stderr, "New multiplier has to be between 1 (100 MHz) and 83 (8300 MHz).\n");
+		if (newval < NOTURBO_MAX_CLK || newval > 80) {
+			fprintf(stderr, "New multiplier has to be between %d (%d MHz) and 80 (8000 MHz).\n", NOTURBO_MAX_CLK, NOTURBO_MAX_CLK * BCLK);
 			return;
 		}
 		regdata = rdmsr_on_cpu(429, 0);
@@ -100,7 +112,7 @@ void write_data(int function_code, uint64_t newval) {
 	uint64_t units_raw;
 	int power_unit;
 	int abs_temp_limit;
-	/* read the main menu for meanings of fuction codes */
+	/* read the main menu for meanings of function codes */
 	switch (function_code) {
 	case 0:
 		/* error handling for invalid input */
@@ -124,8 +136,8 @@ void write_data(int function_code, uint64_t newval) {
 		write_turbo_multiplier(function_code, newval);
 		break;
 	case 5:
-		if (newval < 1 || newval > 83) {
-			fprintf(stderr, "New multiplier has to be between 1 (100 MHz) and 83 (8300 MHz).\n");
+		if (newval < NOTURBO_EFF_CLK || newval > CURR_MAX_TURBO) {
+			fprintf(stderr, "New multiplier has to be between %d (%d MHz) and %d (%d MHz).\n", NOTURBO_EFF_CLK, NOTURBO_EFF_CLK * BCLK, CURR_MAX_TURBO, CURR_MAX_TURBO * BCLK);
 			return;
 		}
 		regdata = rdmsr_on_cpu(1568, 0);
@@ -134,8 +146,8 @@ void write_data(int function_code, uint64_t newval) {
 		wrmsr_on_cpu(1568, 0, new_data);
 		break;
 	case 6:
-		if (newval < 1 || newval > 83) {
-			fprintf(stderr, "New multiplier has to be between 1 (100 MHz) and 83 (8300 MHz).\n");
+		if (newval < NOTURBO_MAX_CLK || newval > CURR_MAX_TURBO) {
+			fprintf(stderr, "New multiplier has to be between %d (%d MHz) and %d (%d MHz).\n", NOTURBO_MAX_CLK, NOTURBO_MAX_CLK * BCLK, CURR_MAX_TURBO, CURR_MAX_TURBO * BCLK);
 			return;
 		}
 		regdata = rdmsr_on_cpu(1568, 0);
