@@ -27,7 +27,7 @@
 #include <unistd.h>
 #include <stdio.h>
 
-/* will be initialized in setup() in main.c */
+/* some static CPU data; will be initialized in setup() in main.c */
 /* platform info as given from a r/o msr */
 static uint64_t PLATFORM_INFO;
 /* maximum clock rate without turbo; minimum rate turbo can operate on */
@@ -36,13 +36,15 @@ static char NOTURBO_MAX_CLK;
 static char NOTURBO_EFF_CLK;
 /*current maximum turbo clk */
 static unsigned char CURR_MAX_TURBO;
+/*upper temperature limit */
+static unsigned char TEMP_LIMIT;
+/* turbo modes are writeable */
+static char TURBO_WRITEABLE;
 
 /* currently no known way to read out BCLK so this is statically set */
 #define BCLK 100
 
 
-/* returns true iff given function code is turbo-mode-related */
-char turbo_mode_code(int function_code);
 /* helper function which writes data to the MSR for turbo mode */
 void write_turbo_multiplier(int function_code, uint64_t newval);
 /* helper function for preprocessing data for writing it to the msr */
@@ -53,12 +55,8 @@ uint64_t rdmsr_on_cpu(uint32_t reg, int cpu);
 void wrmsr_on_cpu(uint32_t reg, int cpu, uint64_t data);
 unsigned int highbit = 63, lowbit = 0;
 
-char turbo_mode_code(int function_code) {
-	return (function_code > 0 && function_code < 5) || function_code == 1234;
-}
-
 void write_turbo_multiplier(int function_code, uint64_t newval) {
-	if (!turbo_mode_code(function_code)) {
+	if (!((function_code > 0 && function_code < 5) || function_code == 1234)) {
 		fprintf(stderr, "The given function code is not implemented. This should never happen.\n");
 		exit(4);
 	} else {
@@ -111,7 +109,6 @@ void write_data(int function_code, uint64_t newval) {
 	uint64_t new_data;
 	uint64_t units_raw;
 	int power_unit;
-	int abs_temp_limit;
 	/* read the main menu for meanings of function codes */
 	switch (function_code) {
 	case 0:
@@ -236,10 +233,14 @@ void write_data(int function_code, uint64_t newval) {
 		wrmsr_on_cpu(1552, 0, new_data);
 		break;
 	case 15:
+		/* subtract 2 from the absolute limit to ensure the CPU not to overheat */
+		if (newval > TEMP_LIMIT - 2) {
+			fprintf(stderr, "Your CPU does not allow a higher temperature limit than %d°C.\n", TEMP_LIMIT - 2);
+			return;
+		}
 		regdata = rdmsr_on_cpu(418, 0);
 		new_data = regdata & 0b1111111111111111111111111111111111000000111111111111111111111111;
-		abs_temp_limit = ((regdata >> 16) & 0b011111111);
-		newval = abs_temp_limit - newval;
+		newval = TEMP_LIMIT - newval;
 		new_data = new_data | (newval << 24);
 		wrmsr_on_cpu(418, 0, new_data);
 		break;

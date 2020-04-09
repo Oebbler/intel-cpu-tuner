@@ -7,17 +7,18 @@
 
 #include "msr-access.h"
 
-#define VERSION_STRING "0.0.1-alpha5"
+#define VERSION_STRING "0.0.1-alpha6"
 
 /* Number of MSR values stored in msr_values array */
-#define MSR_VALS			6
+#define MSR_VALS				6
 /* define array positions of MSR values */
-#define TURBO_RATIO_LIMIT	0
-#define CACHE_RATIO_LIMIT	1
-#define VOLTAGE				2
-#define RAPL_POWER_UNIT		3
-#define RAPL_POWER_LIMIT	4
-#define TEMPERATURE_LIMIT	5
+#define TURBO_RATIO_LIMIT		0
+#define CACHE_RATIO_LIMIT		1
+#define VOLTAGE					2
+#define RAPL_POWER_UNIT			3
+#define RAPL_POWER_LIMIT		4
+#define TEMPERATURE_LIMIT		5
+#define PLATFORM_POWER_LIMIT	6
 
 /* This method checks if all conditions are met to start the program and loads the msr kernel module */
 char setup();
@@ -119,6 +120,9 @@ int main(int argc, char *argv[]) {
 		if (msr_values[RAPL_POWER_LIMIT] == -1) {
 			printf("power limit settings are not supported on this platform.\n");
 		} else {
+			if (((msr_values[RAPL_POWER_LIMIT] >> 63) & 1) == 1) {
+				printf("Settings 8 to 13 are available for viewing only,\nbecause they are locked by the CPU or the BIOS.\n");
+			}
 			printf(" 8) Long Term Power Limit: %f W\n", (float)(msr_values[RAPL_POWER_LIMIT] & 0b0111111111111111) / (float) (1 << msr_values[RAPL_POWER_UNIT]));
 			printf(" 9) Long Term Power Limit: %sabled\n", (int)((msr_values[RAPL_POWER_LIMIT] >> 15) & 1) == 1 ? "En" : "Dis");
 			printf("10) Long Term Platform Clamping Limit: %sabled\n", (int)((msr_values[RAPL_POWER_LIMIT] >> 16) & 1) == 1 ? "En" : "Dis");
@@ -133,9 +137,8 @@ int main(int argc, char *argv[]) {
 		if (msr_values[TEMPERATURE_LIMIT] == -1) {
 			printf("Temperature settings are not supported on this platform.\n");
 		} else {
-			char abs_temp_limit = (char) ((msr_values[TEMPERATURE_LIMIT] >> 16) & 0b011111111);
 			char offset = (char) ((msr_values[TEMPERATURE_LIMIT] >> 24) & 0b0111111);
-			printf("15) Temperature limit: %d °C\n", abs_temp_limit - offset);
+			printf("15) Temperature limit: %d °C\n", TEMP_LIMIT - offset);
 		}
 		printf(" 0) Exit program\n");
 
@@ -175,9 +178,12 @@ char setup() {
 		fprintf(stderr, "Module msr is needed for this program but cannot be loaded.\n");
 		return 0;
 	}
+	/* initialize static CPU data as defined in msr-access.h */
 	PLATFORM_INFO = rdmsr_on_cpu(206, 0);
 	NOTURBO_MAX_CLK = (PLATFORM_INFO >> 8) & 0b011111111;
 	NOTURBO_EFF_CLK = (PLATFORM_INFO >> 40) & 0b011111111;
+	TEMP_LIMIT = (rdmsr_on_cpu(418, 0) >> 16) & 0b011111111;
+	TURBO_WRITEABLE = (PLATFORM_INFO >> 28) & 1;
 	return 1;
 }
 
@@ -226,6 +232,8 @@ void read_from_msrs(uint64_t **msr_values) {
 	working_msr_values[RAPL_POWER_UNIT] = rdmsr_on_cpu(1542, 0);
 	working_msr_values[RAPL_POWER_LIMIT] = rdmsr_on_cpu(1552, 0);
 	working_msr_values[TEMPERATURE_LIMIT] = rdmsr_on_cpu(418, 0);
+	/* experimental */
+	/*working_msr_values[PLATFORM_POWER_LIMIT] = rdmsr_on_cpu(1628, 0);*/
 }
 
 int parse_int(char *str, int argno) {
