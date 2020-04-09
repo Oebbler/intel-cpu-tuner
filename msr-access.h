@@ -28,6 +28,10 @@
 #include <stdio.h>
 
 
+/* returns true iff given function code is turbo-mode-related */
+char turbo_mode_code(int function_code);
+/* helper function which writes data to the MSR for turbo mode */
+void write_turbo_multiplier(int function_code, uint64_t newval);
 /* helper function for preprocessing data for writing it to the msr */
 void write_data(int function_code, uint64_t newval);
 /* read data from an msr; This code was originally written by Intel */
@@ -36,7 +40,59 @@ uint64_t rdmsr_on_cpu(uint32_t reg, int cpu);
 void wrmsr_on_cpu(uint32_t reg, int cpu, uint64_t data);
 unsigned int highbit = 63, lowbit = 0;
 
+char turbo_mode_code(int function_code) {
+	return (function_code > 0 && function_code < 5) || function_code == 1234;
+}
 
+void write_turbo_multiplier(int function_code, uint64_t newval) {
+	if (!turbo_mode_code(function_code)) {
+		fprintf(stderr, "The given function code is not implemented. This should never happen.\n");
+		exit(4);
+	} else {
+		uint64_t new_data;
+		uint64_t regdata;
+		/* TODO: change against values exposed by the processor's MSRs */
+		if (newval < 1 || newval > 83) {
+			fprintf(stderr, "New multiplier has to be between 1 (100 MHz) and 83 (8300 MHz).\n");
+			return;
+		}
+		regdata = rdmsr_on_cpu(429, 0);
+		switch(function_code) {
+		case 1:
+			new_data = regdata & 0b1111111111111111111111111111111111111111111111111111111100000000;
+			break;
+		case 2:
+			new_data = regdata & 0b1111111111111111111111111111111111111111111111110000000011111111;
+			break;
+		case 3:
+			new_data = regdata & 0b1111111111111111111111111111111111111111000000001111111111111111;
+			break;
+		case 4:
+			new_data = regdata & 0b1111111111111111111111111111111100000000111111111111111111111111;
+			break;
+		case 1234:
+			new_data = regdata & 0b1111111111111111111111111111111100000000000000000000000000000000;
+			break;
+		default:
+			fprintf(stderr, "This functionality in method write_turbo_multiplier is not implemented. This should never happen.\n");
+			exit(5);
+			break;
+		}
+		if (function_code > 0 && function_code < 5) {
+			new_data = new_data | (newval << ((function_code - 1) * 8));
+		} else {
+			/* 4 cores */
+			new_data = new_data | (newval << 24);
+			/* 3 cores */
+			new_data = new_data | (newval << 16);
+			/* 2 cores */
+			new_data = new_data | (newval << 8);
+			/* 1 core */
+			new_data = new_data | newval;
+		}
+		wrmsr_on_cpu(429, 0, new_data);
+	}
+}
 
 void write_data(int function_code, uint64_t newval) {
 	uint64_t regdata;
