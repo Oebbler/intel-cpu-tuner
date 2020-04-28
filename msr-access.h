@@ -44,18 +44,22 @@ static char TURBO_WRITEABLE;
 /* currently no known way to read out BCLK so this is statically set */
 #define BCLK 100
 
-
+/* ASM-function: This method extracts the bit at bitno from a 64-bit integer */
+extern char get_bit(uint64_t input, char bitno);
+/* ASM-function: This method calculates the register value for setting the all-core turbo multiplier */
+extern uint64_t prepare_allturbo(uint64_t curr_val, char newval);
 /* helper function which writes data to the MSR for turbo mode */
-void write_turbo_multiplier(int function_code, uint64_t newval);
+char write_turbo_multiplier(int function_code, uint64_t newval);
 /* helper function for preprocessing data for writing it to the msr */
-void write_data(int function_code, uint64_t newval);
+char write_data(int function_code, uint64_t newval);
 /* read data from an msr; This code was originally written by Intel */
 uint64_t rdmsr_on_cpu(uint32_t reg, int cpu);
 /* write (modified) data to an msr; This code was originally written by Intel */
 void wrmsr_on_cpu(uint32_t reg, int cpu, uint64_t data);
 unsigned int highbit = 63, lowbit = 0;
 
-void write_turbo_multiplier(int function_code, uint64_t newval) {
+/* TODO: rewrite a generation function for wrmsr in ASM */
+char write_turbo_multiplier(int function_code, uint64_t newval) {
 	if (!((function_code > 0 && function_code < 5) || function_code == 1234)) {
 		fprintf(stderr, "The given function code is not implemented. This should never happen.\n");
 		exit(4);
@@ -64,7 +68,7 @@ void write_turbo_multiplier(int function_code, uint64_t newval) {
 		uint64_t regdata;
 		if (newval < NOTURBO_MAX_CLK || newval > 80) {
 			fprintf(stderr, "New multiplier has to be between %d (%d MHz) and 80 (8000 MHz).\n", NOTURBO_MAX_CLK, NOTURBO_MAX_CLK * BCLK);
-			return;
+			return 1;
 		}
 		regdata = rdmsr_on_cpu(429, 0);
 		switch(function_code) {
@@ -81,30 +85,22 @@ void write_turbo_multiplier(int function_code, uint64_t newval) {
 			new_data = regdata & 0b1111111111111111111111111111111100000000111111111111111111111111;
 			break;
 		case 1234:
-			new_data = regdata & 0b1111111111111111111111111111111100000000000000000000000000000000;
+			new_data = prepare_allturbo(regdata, newval);
 			break;
 		default:
 			fprintf(stderr, "This functionality in method write_turbo_multiplier is not implemented. This should never happen.\n");
 			exit(5);
-			break;
+			return 1;
 		}
 		if (function_code > 0 && function_code < 5) {
 			new_data = new_data | (newval << ((function_code - 1) * 8));
-		} else {
-			/* 4 cores */
-			new_data = new_data | (newval << 24);
-			/* 3 cores */
-			new_data = new_data | (newval << 16);
-			/* 2 cores */
-			new_data = new_data | (newval << 8);
-			/* 1 core */
-			new_data = new_data | newval;
 		}
 		wrmsr_on_cpu(429, 0, new_data);
 	}
+	return 0;
 }
 
-void write_data(int function_code, uint64_t newval) {
+char write_data(int function_code, uint64_t newval) {
 	uint64_t regdata;
 	uint64_t new_data;
 	uint64_t units_raw;
@@ -117,8 +113,35 @@ void write_data(int function_code, uint64_t newval) {
 		case 7:
 			fprintf(stderr, "CPU voltage is read-only.\n");
 			break;
-		case 14:
-			fprintf(stderr, "This program will not lock or unlock the power limit settings.\n");
+		case 8:
+			/* check if locked */
+			regdata = rdmsr_on_cpu(1552, 0);
+			if (get_bit(regdata, 63)) {
+				/* Try to unlock the package power limit settings (should not work until a reboot, but who knows) */
+				new_data = regdata & 0b0111111111111111111111111111111111111111111111111111111111111111;
+				wrmsr_on_cpu(1552, 0, new_data);
+				/* check if unlocking was successful */
+				if (rdmsr_on_cpu(1552, 0) == regdata) {
+					fprintf(stderr, "Unlocking the power limit settings was not successful.\n");
+				}
+			} else {
+				fprintf(stderr, "This program will not lock the power limit settings.\n");
+			}
+			break;
+		case 16:
+			/* check if locked */
+			regdata = rdmsr_on_cpu(1628, 0);
+			if (get_bit(regdata, 63)) {
+				/* Try to unlock the platform power limit settings (should not work until a reboot, but who knows) */
+				new_data = regdata & 0b0111111111111111111111111111111111111111111111111111111111111111;
+				wrmsr_on_cpu(1628, 0, new_data);
+				/* check if unlocking was successful */
+				if (rdmsr_on_cpu(1628, 0) == regdata) {
+					fprintf(stderr, "Unlocking the power limit settings was not successful.\n");
+				}
+			} else {
+				fprintf(stderr, "This program will not lock the power limit settings.\n");
+			}
 			break;
 		default:
 			fprintf(stderr, "No valid input.\n");
@@ -130,12 +153,11 @@ void write_data(int function_code, uint64_t newval) {
 	case 3:
 	case 4:
 	case 1234:
-		write_turbo_multiplier(function_code, newval);
-		break;
+		return write_turbo_multiplier(function_code, newval);
 	case 5:
 		if (newval < NOTURBO_EFF_CLK || newval > CURR_MAX_TURBO) {
 			fprintf(stderr, "New multiplier has to be between %d (%d MHz) and %d (%d MHz).\n", NOTURBO_EFF_CLK, NOTURBO_EFF_CLK * BCLK, CURR_MAX_TURBO, CURR_MAX_TURBO * BCLK);
-			return;
+			return 1;
 		}
 		regdata = rdmsr_on_cpu(1568, 0);
 		new_data = regdata & 0b1111111111111111111111111111111111111111111111110000000011111111;
@@ -145,30 +167,17 @@ void write_data(int function_code, uint64_t newval) {
 	case 6:
 		if (newval < NOTURBO_MAX_CLK || newval > CURR_MAX_TURBO) {
 			fprintf(stderr, "New multiplier has to be between %d (%d MHz) and %d (%d MHz).\n", NOTURBO_MAX_CLK, NOTURBO_MAX_CLK * BCLK, CURR_MAX_TURBO, CURR_MAX_TURBO * BCLK);
-			return;
+			return 1;
 		}
 		regdata = rdmsr_on_cpu(1568, 0);
 		new_data = regdata & 0b1111111111111111111111111111111111111111111111111111111100000000;
 		new_data = new_data | newval;
 		wrmsr_on_cpu(1568, 0, new_data);
 		break;
-	case 8:
-		if (newval < 1 || newval > 4095) {
-			fprintf(stderr, "New power limit exceeds range (4095 watts) or is negative.\n");
-			return;
-		}
-		regdata = rdmsr_on_cpu(1552, 0);
-		units_raw = rdmsr_on_cpu(1542, 0);
-		power_unit = (int)((units_raw) & 0b01111);
-		new_data = regdata & 0b1111111111111111111111111111111111111111111111111000000000000000;
-		newval = (newval * (1 << power_unit)) & 0b0111111111111111;
-		new_data = new_data | newval;
-		wrmsr_on_cpu(1552, 0, new_data);
-		break;
 	case 9:
 		if (newval != 1 && newval != 0) {
 			fprintf(stderr, "This value can only be set to 0 (disabled) or 1 (enabled).\n");
-			return;
+			return 1;
 		}
 		regdata = rdmsr_on_cpu(1552, 0);
 		new_data = regdata & 0b1111111111111111111111111111111111111111111111110111111111111111;
@@ -180,7 +189,7 @@ void write_data(int function_code, uint64_t newval) {
 	case 10:
 		if (newval != 1 && newval != 0) {
 			fprintf(stderr, "This value can only be set to 0 (disabled) or 1 (enabled).\n");
-			return;
+			return 1;
 		}
 		regdata = rdmsr_on_cpu(1552, 0);
 		new_data = regdata & 0b1111111111111111111111111111111111111111111111101111111111111111;
@@ -194,20 +203,20 @@ void write_data(int function_code, uint64_t newval) {
 	case 11:
 		if (newval < 1 || newval > 4095) {
 			fprintf(stderr, "New power limit exceeds range (4095 watts) or is negative.\n");
-			return;
+			return 1;
 		}
 		regdata = rdmsr_on_cpu(1552, 0);
 		units_raw = rdmsr_on_cpu(1542, 0);
 		power_unit = (int)((units_raw) & 0b01111);
-		new_data = regdata & 0b1111111111111111100000000000000011111111111111111111111111111111;
-		newval = ((newval * (1 << power_unit)) & 0b0111111111111111) << 32;
+		new_data = regdata & 0b1111111111111111111111111111111111111111111111111000000000000000;
+		newval = (newval * (1 << power_unit)) & 0b0111111111111111;
 		new_data = new_data | newval;
 		wrmsr_on_cpu(1552, 0, new_data);
 		break;
 	case 12:
 		if (newval != 1 && newval != 0) {
 			fprintf(stderr, "This value can only be set to 0 (disabled) or 1 (enabled).\n");
-			return;
+			return 1;
 		}
 		regdata = rdmsr_on_cpu(1552, 0);
 		new_data = regdata & 0b1111111111111111011111111111111111111111111111111111111111111111;
@@ -221,7 +230,7 @@ void write_data(int function_code, uint64_t newval) {
 	case 13:
 		if (newval != 1 && newval != 0) {
 			fprintf(stderr, "This value can only be set to 0 (disabled) or 1 (enabled).\n");
-			return;
+			return 1;
 		}
 		regdata = rdmsr_on_cpu(1552, 0);
 		new_data = regdata & 0b1111111111111110111111111111111111111111111111111111111111111111;
@@ -232,22 +241,121 @@ void write_data(int function_code, uint64_t newval) {
 		}
 		wrmsr_on_cpu(1552, 0, new_data);
 		break;
+	case 14:
+		if (newval < 1 || newval > 4095) {
+			fprintf(stderr, "New power limit exceeds range (4095 watts) or is negative.\n");
+			return 1;
+		}
+		regdata = rdmsr_on_cpu(1552, 0);
+		units_raw = rdmsr_on_cpu(1542, 0);
+		power_unit = (int)((units_raw) & 0b01111);
+		new_data = regdata & 0b1111111111111111100000000000000011111111111111111111111111111111;
+		newval = ((newval * (1 << power_unit)) & 0b0111111111111111) << 32;
+		new_data = new_data | newval;
+		wrmsr_on_cpu(1552, 0, new_data);
+		break;
 	case 15:
 		/* subtract 2 from the absolute limit to ensure the CPU not to overheat */
 		if (newval > TEMP_LIMIT - 2) {
 			fprintf(stderr, "Your CPU does not allow a higher temperature limit than %d°C.\n", TEMP_LIMIT - 2);
-			return;
+			return 1;
+		}
+		newval = TEMP_LIMIT - newval;
+		/* newval is now the offset value which is written to the CPU */
+		if (newval > 63) {
+			fprintf(stderr, "Your CPU does not allow a lower temperature limit than %d°C.\n", TEMP_LIMIT - 63);
+			return 1;
 		}
 		regdata = rdmsr_on_cpu(418, 0);
 		new_data = regdata & 0b1111111111111111111111111111111111000000111111111111111111111111;
-		newval = TEMP_LIMIT - newval;
 		new_data = new_data | (newval << 24);
 		wrmsr_on_cpu(418, 0, new_data);
 		break;
+	case 17:
+		if (newval != 1 && newval != 0) {
+			fprintf(stderr, "This value can only be set to 0 (disabled) or 1 (enabled).\n");
+			return 1;
+		}
+		regdata = rdmsr_on_cpu(1628, 0);
+		new_data = regdata & 0b1111111111111111111111111111111111111111111111110111111111111111;
+		if (newval == 1) {
+			new_data = new_data | ((uint64_t)1 << 15);
+		}
+		wrmsr_on_cpu(1628, 0, new_data);
+		break;
+	case 18:
+		if (newval != 1 && newval != 0) {
+			fprintf(stderr, "This value can only be set to 0 (disabled) or 1 (enabled).\n");
+			return 1;
+		}
+		regdata = rdmsr_on_cpu(1628, 0);
+		new_data = regdata & 0b1111111111111111111111111111111111111111111111101111111111111111;
+		if (newval == 1) {
+			new_data = new_data | ((uint64_t)1 << 16);
+		} else if (newval != 0) {
+			break;
+		}
+		wrmsr_on_cpu(1628, 0, new_data);
+		break;
+	case 19:
+		if (newval < 1 || newval > 4095) {
+			fprintf(stderr, "New power limit exceeds range (4095 watts) or is negative.\n");
+			return 1;
+		}
+		regdata = rdmsr_on_cpu(1628, 0);
+		units_raw = rdmsr_on_cpu(1542, 0);
+		power_unit = (int)((units_raw) & 0b01111);
+		new_data = regdata & 0b1111111111111111111111111111111111111111111111111000000000000000;
+		newval = (newval * (1 << power_unit)) & 0b0111111111111111;
+		new_data = new_data | newval;
+		wrmsr_on_cpu(1628, 0, new_data);
+		break;
+	case 20:
+		if (newval != 1 && newval != 0) {
+			fprintf(stderr, "This value can only be set to 0 (disabled) or 1 (enabled).\n");
+			return 1;
+		}
+		regdata = rdmsr_on_cpu(1628, 0);
+		new_data = regdata & 0b1111111111111111011111111111111111111111111111111111111111111111;
+		if (newval == 1) {
+			new_data = new_data | ((uint64_t)1 << 47);
+		} else if (newval != 0) {
+			break;
+		}
+		wrmsr_on_cpu(1628, 0, new_data);
+		break;
+	case 21:
+		if (newval != 1 && newval != 0) {
+			fprintf(stderr, "This value can only be set to 0 (disabled) or 1 (enabled).\n");
+			return 1;
+		}
+		regdata = rdmsr_on_cpu(1628, 0);
+		new_data = regdata & 0b1111111111111110111111111111111111111111111111111111111111111111;
+		if (newval == 1) {
+			new_data = new_data | ((uint64_t)1 << 48);
+		} else if (newval != 0) {
+			break;
+		}
+		wrmsr_on_cpu(1628, 0, new_data);
+		break;
+	case 22:
+		if (newval < 1 || newval > 4095) {
+			fprintf(stderr, "New power limit exceeds range (4095 watts) or is negative.\n");
+			return 1;
+		}
+		regdata = rdmsr_on_cpu(1628, 0);
+		units_raw = rdmsr_on_cpu(1542, 0);
+		power_unit = (int)((units_raw) & 0b01111);
+		new_data = regdata & 0b1111111111111111100000000000000011111111111111111111111111111111;
+		newval = ((newval * (1 << power_unit)) & 0b0111111111111111) << 32;
+		new_data = new_data | newval;
+		wrmsr_on_cpu(1628, 0, new_data);
+		break;
 	default:
 		fprintf(stderr, "This functionality is not implemented.\n");
-		break;
+		return 1;
 	}
+	return 0;
 }
 
 uint64_t rdmsr_on_cpu(uint32_t reg, int cpu)

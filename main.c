@@ -7,19 +7,25 @@
 
 #include "msr-access.h"
 
-#define VERSION_STRING "0.0.1-alpha6"
-
 /* Number of MSR values stored in msr_values array */
-#define MSR_VALS				6
+#define MSR_VALS					7
 /* define array positions of MSR values */
-#define TURBO_RATIO_LIMIT		0
-#define CACHE_RATIO_LIMIT		1
-#define VOLTAGE					2
-#define RAPL_POWER_UNIT			3
-#define RAPL_POWER_LIMIT		4
-#define TEMPERATURE_LIMIT		5
-#define PLATFORM_POWER_LIMIT	6
+#define TURBO_RATIO_LIMIT			0
+#define CACHE_RATIO_LIMIT			1
+#define VOLTAGE						2
+#define RAPL_POWER_UNIT				3
+#define RAPL_PKG_POWER_LIMIT		4
+#define RAPL_PLATFORM_POWER_LIMIT	5
+#define TEMPERATURE_LIMIT			6
+#define PLATFORM_POWER_LIMIT		7
 
+
+#define VERSION_STRING "0.1.0-alpha6"
+
+/* ASM-function: This method extracts the bit at bitno from a 64-bit integer plus the 7 bits before */
+extern char get_byte(uint64_t input, char bitno);
+/* ASM-function: This method extracts "upper downto lower" from a 64-bit integer */
+extern uint64_t downto(uint64_t input, char upper, char lower);
 /* This method checks if all conditions are met to start the program and loads the msr kernel module */
 char setup();
 /* stores the currently defined maximum turbo value in the defined global variable */
@@ -65,94 +71,71 @@ int main(int argc, char *argv[]) {
 		exit_program(&msr_values, &value, &input, &turbo_vals);
 	}
 
-	/* main program; currently designed especially for i7-6820HK, but this works on other CPUs as well */
 	for (;;) {
+		read_from_msrs(&msr_values);
+		get_turbo_vals(&turbo_vals, msr_values);
 
 		printf("CPU tuning utility for Intel processors version ");
 		printf(VERSION_STRING);
 		printf("\nChoose an option to change or press 0 to exit.\n\n");
-
-		read_from_msrs(&msr_values);
-
-		/* turbo boost ratios */
 		if (msr_values[TURBO_RATIO_LIMIT] == -1) {
-			printf ("Core clock ratio settings are not supported on this platform.\n");
+			printf("Turbo frequency settings are not supported on your CPU.\n");
 		} else {
-			get_turbo_vals(&turbo_vals, msr_values);
-			printf(" 1) Turbo frequency (1  core): %d MHz\n", (int) turbo_vals[0] * BCLK);
-			printf(" 2) Turbo frequency (2 cores): %d MHz\n", (int) turbo_vals[1] * BCLK);
-			printf(" 3) Turbo frequency (3 cores): %d MHz\n", (int) turbo_vals[2] * BCLK);
-			printf(" 4) Turbo frequency (4 cores): %d MHz\n", (int) turbo_vals[3] * BCLK);
 			printf("1234) Set turbo frequency for all cores\n");
+			printf("   1) Turbo frequency (1  core):                        %4d MHz\n", turbo_vals[0] * BCLK);
+			printf("   2) Turbo frequency (2 cores):                        %4d MHz\n", turbo_vals[1] * BCLK);
+			printf("   3) Turbo frequency (3 cores):                        %4d MHz\n", turbo_vals[2] * BCLK);
+			printf("   4) Turbo frequency (4 cores):                        %4d MHz\n", turbo_vals[3] * BCLK);
 		}
-
-		/* cache ratio */
 		if (msr_values[CACHE_RATIO_LIMIT] == -1) {
-			printf ("Cache ratio settings are not supported on this platform.\n");
+			printf("Cache frequency settings are not supported on your CPU.\n");
 		} else {
-			printf(" 5-6) Cache frequency (min/max): %d / %d MHz\n", (int)((msr_values[CACHE_RATIO_LIMIT] >> 8) & 0b011111111) * BCLK, (int)((msr_values[CACHE_RATIO_LIMIT] & 0b011111111) * BCLK));
+			printf("   5) Minimum Cache frequency :                         %4d MHz\n", (char)downto(msr_values[CACHE_RATIO_LIMIT], 14, 8) * BCLK);
+			printf("   6) Maximum Cache frequency :                         %4d MHz\n", (char)downto(msr_values[CACHE_RATIO_LIMIT], 6, 0) * BCLK);
 		}
-
-		/* current CPU voltage */
 		if (msr_values[VOLTAGE] == -1) {
-			printf("Voltage cannot be measured on this platform.\n");
+			printf("Voltage measuring is not supported on your CPU.\n");
 		} else {
-			printf(" 7) Current CPU voltage: %f V\n", (float)((msr_values[VOLTAGE] >> 32) & 0b01111111111111111) / (1 << 13));
+			printf("   7) Current CPU voltage:                               %.3f V\n", (float) (downto(msr_values[VOLTAGE], 47, 32) * (float) 1 / (1 << 13)));
 		}
-
-		/* read current power limit; not working at the moment, but in this way documented by Intel */
-		/*uint64_t msr_values[POWER_LIMIT] = rdmsr_on_cpu(1628, 0);
-		printf("Long Term Power Limit: %d\n", (int)(msr_values[POWER_LIMIT] & 0b0111111111111111));
-		printf("Long Term Power Limit Enabled: %d\n", (int) (msr_values[POWER_LIMIT] >> 15) & 1);
-		printf("Long Term Platform Clamping Limit Enabled: %d\n", (int) (msr_values[POWER_LIMIT] >> 16) & 1);
-		printf("Long Term Power Limit time: %d\n", (int) (msr_values[POWER_LIMIT] >> 17) & 0b01111111);
-		printf("Short Term Power Limit: %d\n", (int) (msr_values[POWER_LIMIT] >> 32) & 0b0111111111111111);
-		printf("Short Term Power Limit Enabled: %d\n", (int) (msr_values[POWER_LIMIT] >> 47) & 1);
-		printf("Short Term Platform Clamping Limit Enabled: %d\n", (int) (msr_values[POWER_LIMIT] >> 48) & 1);
-		printf("Power Limit Settings blocked: %d\n", (int) (msr_values[POWER_LIMIT] >> 63) & 1);*/
-
-		/* extract the currently only needed value from the power unit MSR */
-		msr_values[RAPL_POWER_UNIT] = msr_values[RAPL_POWER_UNIT] & 0b01111;
-		/*int energy_unit = (int)((raw_power(MSR 1542) >> 8) & 0b011111);*/
-		/*int time_unit = (int)((raw_power(MSR 1542) >> 16) & 0b01111);*/
-
-		/* power limit */
-		if (msr_values[RAPL_POWER_LIMIT] == -1) {
-			printf("power limit settings are not supported on this platform.\n");
+		if (msr_values[RAPL_PKG_POWER_LIMIT] == -1) {
+			printf("Package Power limit settings are not supported on your CPU.\n");
 		} else {
-			if (((msr_values[RAPL_POWER_LIMIT] >> 63) & 1) == 1) {
-				printf("Settings 8 to 13 are available for viewing only,\nbecause they are locked by the CPU or the BIOS.\n");
-			}
-			printf(" 8) Long Term Power Limit: %f W\n", (float)(msr_values[RAPL_POWER_LIMIT] & 0b0111111111111111) / (float) (1 << msr_values[RAPL_POWER_UNIT]));
-			printf(" 9) Long Term Power Limit: %sabled\n", (int)((msr_values[RAPL_POWER_LIMIT] >> 15) & 1) == 1 ? "En" : "Dis");
-			printf("10) Long Term Platform Clamping Limit: %sabled\n", (int)((msr_values[RAPL_POWER_LIMIT] >> 16) & 1) == 1 ? "En" : "Dis");
-			/*printf("Long Term Power Limit time: %d\n", (int) ((1 << ((msr_values[POWER_LIMIT] >> 17) & 0b011111)) * (1.0 + ((msr_values[POWER_LIMIT] >> 54) & 0b011) / 4.0) * time_unit));*/
-			printf("11) Short Term Power Limit: %f W\n", (float) ((msr_values[RAPL_POWER_LIMIT] >> 32) & 0b0111111111111111) / (float) (1 << msr_values[RAPL_POWER_UNIT]));
-			printf("12) Short Term Power Limit: %sabled\n", ((msr_values[RAPL_POWER_LIMIT] >> 47) & 1) == 1 ? "En" : "Dis");
-			printf("13) Short Term Platform Clamping Limit: %sabled\n", ((msr_values[RAPL_POWER_LIMIT] >> 48) & 1) == 1 ? "En" : "Dis");
-			printf("14) Power Limit Settings status: %socked\n", ((msr_values[RAPL_POWER_LIMIT] >> 63) & 1) == 1 ? "L" : "Unl");
+			printf("   8) Package Power Limit settings status:               %socked\n", get_bit(msr_values[RAPL_PKG_POWER_LIMIT], 63) ? "L" : "Unl");
+			printf("   9) Long Term Package Power Limit Status:              %sabled\n", get_bit(msr_values[RAPL_PKG_POWER_LIMIT], 15) ? "En" : "Dis");
+			printf("  10) Long Term Package Clamping Limitation:             %sabled\n", get_bit(msr_values[RAPL_PKG_POWER_LIMIT], 16) ? "En" : "Dis");
+			printf("  11) Long Term Package Power Limit:                     %.3f W\n", downto(msr_values[RAPL_PKG_POWER_LIMIT], 14, 0) / (float) (1 << downto(msr_values[RAPL_POWER_UNIT], 3, 0)));
+			printf("  12) Short Term Package Power Limit Status:             %sabled\n", get_bit(msr_values[RAPL_PKG_POWER_LIMIT], 47) ? "En" : "Dis");
+			printf("  13) Short Term Package Package Clamping Limitation:    %sabled\n", get_bit(msr_values[RAPL_PKG_POWER_LIMIT], 48) ? "En" : "Dis");
+			printf("  14) Short Term Package Power Limit:                    %.3f W\n", downto(msr_values[RAPL_PKG_POWER_LIMIT], 46, 32) / (float) (1 << downto(msr_values[RAPL_POWER_UNIT], 3, 0)));
 		}
-
-		/* temperature limit */
 		if (msr_values[TEMPERATURE_LIMIT] == -1) {
-			printf("Temperature settings are not supported on this platform.\n");
+			printf("Temperature settings are not supported on your CPU.\n");
 		} else {
-			char offset = (char) ((msr_values[TEMPERATURE_LIMIT] >> 24) & 0b0111111);
-			printf("15) Temperature limit: %d °C\n", TEMP_LIMIT - offset);
-		}
-		printf(" 0) Exit program\n");
+			printf("  15) Temperature Limit:                                    %d°C\n", TEMP_LIMIT - (int)downto(msr_values[TEMPERATURE_LIMIT], 29, 24));
 
-		/* read user input */
-		printf("Which value should be changed (0 for exit)? ");
+		}
+		if (msr_values[RAPL_PLATFORM_POWER_LIMIT] == -1) {
+			printf("Platform Power limit settings are not supported by your CPU.\n");
+		} else {
+			printf("  16) Platform Power Limit settings status:              %socked\n", get_bit(msr_values[RAPL_PLATFORM_POWER_LIMIT], 63) ? "L" : "Unl");
+			printf("  17) Long Term Platform Power Limit Status:             %sabled\n", get_bit(msr_values[RAPL_PLATFORM_POWER_LIMIT], 15) ? "En" : "Dis");
+			printf("  18) Long Term Platform Clamping Limitation:            %sabled\n", get_bit(msr_values[RAPL_PLATFORM_POWER_LIMIT], 16) ? "En" : "Dis");
+			printf("  19) Long Term Platform Power Limit:                    %.3f W\n", (float) (downto(msr_values[RAPL_PLATFORM_POWER_LIMIT], 14, 0) / (float) (1 << downto(msr_values[RAPL_POWER_UNIT], 3, 0))));
+			printf("  20) Short Term Platform Power Limit Status:            %sabled\n", get_bit(msr_values[RAPL_PLATFORM_POWER_LIMIT], 47) ? "En" : "Dis");
+			printf("  21) Short Term Platform Clamping Limitation:           %sabled\n", get_bit(msr_values[RAPL_PLATFORM_POWER_LIMIT], 48) ? "En" : "Dis");
+			printf("  22) Short Term Platform Power Limit:                   %.3f W\n", (float) (downto(msr_values[RAPL_PLATFORM_POWER_LIMIT], 46, 32) / (float) (1 << downto(msr_values[RAPL_POWER_UNIT], 3, 0))));
+		}
+
+		printf("Which setting should be changed? [0-22, 1234] ");
 		scanf("%d", input);
 		if (*input == 0) {
 			exit_program(&msr_values, &value, &input, &turbo_vals);
+			return 0;
 		}
-		/* if voltage / lockage should be set or any setting not in the list (input between 1 and 15 or 1234), don't write anything */
-		if ((*input == 7 || *input == 14 || *input < 1 || *input > 15) && *input != 1234) {
+		if (*input == 7 || *input == 8 || *input == 16 || ((*input < 1 || *input > 22) && *input != 1234)) {
 			write_data(0, *input);
-		}
-		else {
+		} else {
 			printf("Type new value: ");
 			scanf("%d", value);
 			write_data(*input, *value);
@@ -180,10 +163,10 @@ char setup() {
 	}
 	/* initialize static CPU data as defined in msr-access.h */
 	PLATFORM_INFO = rdmsr_on_cpu(206, 0);
-	NOTURBO_MAX_CLK = (PLATFORM_INFO >> 8) & 0b011111111;
-	NOTURBO_EFF_CLK = (PLATFORM_INFO >> 40) & 0b011111111;
-	TEMP_LIMIT = (rdmsr_on_cpu(418, 0) >> 16) & 0b011111111;
-	TURBO_WRITEABLE = (PLATFORM_INFO >> 28) & 1;
+	NOTURBO_MAX_CLK = get_byte(PLATFORM_INFO, 8);
+	NOTURBO_EFF_CLK = get_byte(PLATFORM_INFO, 40);
+	TEMP_LIMIT = get_byte(rdmsr_on_cpu(418, 0), 16);
+	TURBO_WRITEABLE = get_bit(PLATFORM_INFO, 28);
 	return 1;
 }
 
@@ -195,9 +178,12 @@ void get_turbo_vals(char **turbo_vals, uint64_t *msr_values) {
 		exit(6);
 	}
 	CURR_MAX_TURBO = 0;
+	/* turbo values for 1, 2, 3 and 4 cores */
+	working_vals[0] = (get_byte(msr_values[TURBO_RATIO_LIMIT], 0));
+	working_vals[1] = (get_byte(msr_values[TURBO_RATIO_LIMIT], 8));
+	working_vals[2] = (get_byte(msr_values[TURBO_RATIO_LIMIT], 16));
+	working_vals[3] = (get_byte(msr_values[TURBO_RATIO_LIMIT], 24));
 	for (i = 0; i < 4; i++) {
-		/* turbo values for 1, 2, 3 and 4 cores */
-		working_vals[i] = (msr_values[TURBO_RATIO_LIMIT] >> (i * 8)) & 0b011111111;
 		/* maximum of all turbo values */
 		if (working_vals[i] > CURR_MAX_TURBO) {
 			CURR_MAX_TURBO = working_vals[i];
@@ -230,16 +216,15 @@ void read_from_msrs(uint64_t **msr_values) {
 	working_msr_values[CACHE_RATIO_LIMIT] = rdmsr_on_cpu(1568, 0);
 	working_msr_values[VOLTAGE] = rdmsr_on_cpu(408, 0);
 	working_msr_values[RAPL_POWER_UNIT] = rdmsr_on_cpu(1542, 0);
-	working_msr_values[RAPL_POWER_LIMIT] = rdmsr_on_cpu(1552, 0);
+	working_msr_values[RAPL_PKG_POWER_LIMIT] = rdmsr_on_cpu(1552, 0);
+	working_msr_values[RAPL_PLATFORM_POWER_LIMIT] = rdmsr_on_cpu(1628, 0);
 	working_msr_values[TEMPERATURE_LIMIT] = rdmsr_on_cpu(418, 0);
-	/* experimental */
-	/*working_msr_values[PLATFORM_POWER_LIMIT] = rdmsr_on_cpu(1628, 0);*/
 }
 
 int parse_int(char *str, int argno) {
-	int i;
-	int success = 0;
-	int result = 0;
+	char i;
+	char success = 0;
+	char result = 0;
 	for (i = 0; i < 11; i++) {
 		if (str[i] == 0) {
 			success = 1;
@@ -258,5 +243,3 @@ int parse_int(char *str, int argno) {
 		exit(1);
 	}
 }
-
-

@@ -1,5 +1,5 @@
 build: clean
-	@gcc main.c -o intel-cpu-tuner
+	@gcc main.c functions.s -o intel-cpu-tuner
 	@chmod +x intel-cpu-tuner
 
 install: build
